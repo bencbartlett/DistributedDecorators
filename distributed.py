@@ -61,18 +61,23 @@ class HQueue(object):
 
     def connect(self):
         self.proxy = xmlrpclib.ServerProxy("http://localhost:20000")
-        self.ipA, self.ipN = self.proxy.distributeNodeInfo()
-        for address, node in zip(self.ipA, self.ipN):
-            if address != '':
-                # Connect to each individual non-empty node
-                self.nodes.append(xmlrpclib.ServerProxy(address + ":" + str(node + 19000)))
+        self.nodes = self.proxy.distributeNodeInfo()
+        print self.nodes
+        for nodeID in self.nodes:
+            node = self.nodes[nodeID]
+            node["proxy"] = xmlrpclib.ServerProxy(str(node["IP"]) + ":" + str(node["port"]))
+            # for address, node in zip(self.ipA, self.ipN):
+            #     if address != '':
+            #         # Connect to each individual non-empty node
+            #         self.nodes.append(xmlrpclib.ServerProxy(address + ":" + str(node + 19000)))
 
     def process(self, wait = True):
         '''Start everything processing, wait until finished and return all results.'''
         if not self.quiet: print "Starting processing..."
         threads = []
-        for node in self.nodes:
-            worker = Thread(target = self.sender, args = (node,))
+        for nodeID in self.nodes:
+            node = self.nodes[nodeID]
+            worker = Thread(target = self.sender, args = (node["proxy"],))
             threads.append(worker)
             worker.start()
             if not self.quiet: print "Starting thread " + str(worker)
@@ -81,7 +86,7 @@ class HQueue(object):
                 t.join()
             return self.getAll()
 
-    def sender(self, node):
+    def sender(self, nodeProxy):
         '''Thread that keeps sending requests until it's told to stop'''
         while self.loop:
             if self.unprocessed.empty():  # Break if there's nothing left to process
@@ -92,15 +97,16 @@ class HQueue(object):
                     f, args, index = self.unprocessed.get()
                     # if not self.quiet: print f, args, index
                     if args == None:
-                        f = node.dispatcher(f)  # getattr(node, f)()
+                        f = nodeProxy.dispatcher(f)  # getattr(node, f)()
                     else:
-                        f = node.dispatcher(f, args)  # getattr(node, f)(*args)
+                        f = nodeProxy.dispatcher(f, args)  # getattr(node, f)(*args)
                 else:
                     f, args = self.unprocessed.get()
+                    index = None
                     if args == None:
-                        f = node.dispatcher(f)  # getattr(node, f)()
+                        f = nodeProxy.dispatcher(f)  # getattr(node, f)()
                     else:
-                        f = node.dispatcher(f, args)  # getattr(node, f)(*args)
+                        f = nodeProxy.dispatcher(f, args)  # getattr(node, f)(*args)
             if self.ordered:
                 self.processed.put((f, index))
             else:
@@ -112,12 +118,18 @@ if __name__ == '__main__':
     # Demonstration function
     import time
 
+    # def f(x):
+    #     print "hi" + str(x)
+    #     return x ** 1.5
+
     q = HQueue(ordered = True, quiet = False)
+    # for nodeID in q.nodes:
+    #     node = q.nodes[nodeID]
+    #     server = node["server"]
+    #     print server
+    #     server.distributeFunctions([f])
+
     for i in range(100):
-        q.put("add", args = (i, 1))
+        q.put("f", args = (i,))
     results = q.process()
     print results
-
-
-
-

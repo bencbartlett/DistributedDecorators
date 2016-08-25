@@ -7,38 +7,35 @@ import time
 import cmd
 import socket
 import xmlrpclib
+import marshal
 import subprocess
 from threading import Thread
 from SimpleXMLRPCServer import SimpleXMLRPCServer
 
 
+def f(x):
+    print x
+    return x * 2
+
+
 class Server(object):
     '''Single instance of a server to communicate with a single node.'''
 
-    def __init__(self, host, nodeID):
+    def __init__(self, host, port):
         '''Initiate connection with node on main port'''
-        self.job = ""
         self.host = host
-        self.port = nodeID + 17000
-        self.xmlport = nodeID + 19000
-        self.client = xmlrpclib.ServerProxy(self.host + ":" + str(self.port))
+        # self.port = nodeID + 17000
+        self.xmlport = port
         self.fnServer = xmlrpclib.ServerProxy(self.host + ":" + str(self.xmlport))
 
-    def pushCurrentJob(self):
-        '''Tells the client nodes to request the current job.'''
-        self.client.updateJob(self.job)
-        ready = self.client.receiveCurrentJob()
-        return ready
+        # Comment this out
+        self.distributeFunctions([f])
 
-    def sendCurrentJob(self):
-        '''Send the current queued job to client nodes.'''
-        with open("queue/" + self.job + ".hj", "rb") as handle:
-            return xmlrpclib.Binary(handle.read())
-
-    def refreshFunctionServer(self):
-        '''Tell function server to refresh contents.'''
-        ready = self.fnServer.refreshFunctions()
-        return ready
+    def distributeFunctions(self, fnList):
+        # Serialize the function code and send
+        fnCodeDict = {fn.__name__: xmlrpclib.Binary(marshal.dumps(fn.func_code)) for fn in fnList}
+        print fnCodeDict
+        self.fnServer.receiveFunctions(fnCodeDict)
 
 
 def startNodeServer(NS):
@@ -53,47 +50,42 @@ class nodeServer(object):
 
     def __init__(self, quiet = True):
         # Allow xmlrpclib to support really long integers. Some random bug I found.
-        self.maxNodes = 1024
         self.quiet = quiet
-        self.addresses = [""] * self.maxNodes
-        self.nodes = [-1] * self.maxNodes  # Global array representing which nodes are connected
-        self.servers = [None] * self.maxNodes  # Actual array of server objects
-        self.processes = [None] * self.maxNodes  # Array of server processes
-        self.nodeIDs = range(0, self.maxNodes)
+        self.nodes = {}
+        self.servers = {}
+        self.currentNodeID = 0
 
-    def assignID(self, IP):
+    def addNode(self, IP):
         '''Gives the client a port in exchange for their IP'''
-        index = self.nodes.index(-1)
-        ID = self.nodeIDs[index]
-        self.nodes[index] = ID
-        self.addresses[index] = str(IP)
-        pickle.dump(self.nodes, open("nodes.dat", "wb"))  # Save nodes array to a file accessable by CFQueue
-        pickle.dump(self.addresses, open("addresses.dat", "wb"))
-        # if not self.quiet: print "Added node at {} with nodeID {}.".format(IP, ID)
-        return ID
+        node = {"ID": str(self.currentNodeID),
+                "IP": IP}
+        # Default configuration is ports 19000 and up
+        node["port"] = 19000 + int(node["ID"])
+        self.nodes[node["ID"]] = node
+        self.currentNodeID += 1
+        # pickle.dump(self.nodes, open("nodes.dat", "wb"))  # Save nodes array to a file accessable by CFQueue
+        # pickle.dump(self.addresses, open("addresses.dat", "wb"))
+        if not self.quiet: print "Added node at {} with nodeID {}.".format(node["IP"], node["ID"])
+        return node["ID"]
 
     def nodeReady(self, nodeID):
         '''Tells master node that a client node is ready and starts corresponding Server() process'''
-        time.sleep(1)  # Just to make sure the client is started
-        server = Server(self.addresses[nodeID], self.nodes[nodeID])
-        self.servers[nodeID] = server
+        node = self.nodes[str(nodeID)]
+        server = Server(node["IP"], node["port"])
+        # Add server to node object
+        self.servers[node["ID"]] = server
         if not self.quiet:
             print ""
             print "-> {:8}: Automatically added node {} at {}:" \
-                .format(time.strftime('%X'), nodeID, self.addresses[nodeID].split("http://")[1])
+                .format(time.strftime('%X'), node["ID"], node["IP"].split("http://")[1])
             print " " * (5 + 8) + "Node object: {}".format(server)
             sys.stdout.write(">> ")  # Print new input character
             sys.stdout.flush()
 
     def distributeNodeInfo(self):
         '''Distributes current node information to objects wanting to use it, like distributed queues.'''
-        return self.addresses, self.nodes
-
-    def printInfo(self):
-        print self.addresses
         print self.nodes
-        print self.servers
-        print self.processes
+        return self.nodes
 
 
 if __name__ == '__main__':
@@ -109,4 +101,3 @@ if __name__ == '__main__':
 
     while True:  # Loop forever to keep daemon threads alive but be able to exit with ^C
         time.sleep(2)
-
